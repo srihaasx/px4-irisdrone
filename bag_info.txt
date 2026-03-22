@@ -1,0 +1,15 @@
+
+Files:             flight_01_0.db3
+Bag size:          1.5 GiB
+Storage id:        sqlite3
+Duration:          45.366605075s
+Start:             Mar 22 2026 19:04:39.519760349 (1774186479.519760349)
+End:               Mar 22 2026 19:05:24.886365424 (1774186524.886365424)
+Messages:          10895
+Topic information: Topic: /fmu/out/vehicle_status | Type: px4_msgs/msg/VehicleStatus | Count: 53 | Serialization Format: cdr
+                   Topic: /fmu/out/vehicle_local_position | Type: px4_msgs/msg/VehicleLocalPosition | Count: 3200 | Serialization Format: cdr
+                   Topic: /perception/detection | Type: std_msgs/msg/String | Count: 678 | Serialization Format: cdr
+                   Topic: /fmu/out/vehicle_attitude | Type: px4_msgs/msg/VehicleAttitude | Count: 5165 | Serialization Format: cdr
+                   Topic: /perception/image_overlay | Type: sensor_msgs/msg/Image | Count: 677 | Serialization Format: cdr
+                   Topic: /camera/image_raw | Type: sensor_msgs/msg/Image | Count: 1122 | Serialization Format: cdr
+
