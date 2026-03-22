@@ -41,22 +41,6 @@ Autonomous drone simulation built on PX4, ROS 2 Humble, and Gazebo Classic. The 
                                 │                       rosbag2 recorder                       │
                                 │                       records all 6 topics                   │
                                 └──────────────────────────────────────────────────────────────┘
-```
-
-### Topic map
-
-| Topic | Type | Flow |
-|-------|------|------|
-| `/fmu/out/vehicle_local_position` | `px4_msgs/VehicleLocalPosition` | PX4 → state_subscriber, waypoint_navigator |
-| `/fmu/out/vehicle_attitude` | `px4_msgs/VehicleAttitude` | PX4 → state_subscriber |
-| `/fmu/out/vehicle_status` | `px4_msgs/VehicleStatus` | PX4 → state_subscriber, waypoint_navigator |
-| `/camera/image_raw` | `sensor_msgs/Image` | Gazebo → perception_node |
-| `/perception/detection` | `std_msgs/String` | perception_node → waypoint_navigator |
-| `/perception/image_overlay` | `sensor_msgs/Image` | perception_node → rosbag |
-| `/fmu/in/offboard_control_mode` | `px4_msgs/OffboardControlMode` | waypoint_navigator → PX4 |
-| `/fmu/in/trajectory_setpoint` | `px4_msgs/TrajectorySetpoint` | waypoint_navigator → PX4 |
-| `/fmu/in/vehicle_command` | `px4_msgs/VehicleCommand` | waypoint_navigator → PX4 |
-
 ---
 
 ## File structure
