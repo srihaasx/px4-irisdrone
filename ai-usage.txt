@@ -1,0 +1,22 @@
+AI assistance was used in the following specific areas:
+
+1. CODE POLISHING
+   Node structure and Python style cleanup. The core logic — offboard arm
+   sequence, HSV detection pipeline, waypoint phases — was written and
+   debugged hands-on. AI helped clean up formatting, variable naming,
+   and making sure comments were clear and accurate.
+
+2. COORDINATE FRAME DEBUGGING (NED vs ENU)
+   The axis mismatch between Gazebo ENU and PX4 NED caused the drone to
+   fly perpendicular to the box positions. AI helped explain the conversion
+   (Gazebo X → NED Y, Gazebo Y → NED X) and verify the corrected world
+   file coordinates matched the navigator setpoints.
+
+3. CODE VALIDATION BEFORE RUNNING
+   Before flashing nodes to the live simulation, AI reviewed logic for
+   obvious bugs — counter timing, QoS settings, setpoint frame correctness.
+   This caught the TRANSIENT_LOCAL durability mismatch before it wasted
+   more debug time in the sim.
+
+All simulation setup, hardware-software integration, debugging sessions,
+and final verification were done manually on a native Ubuntu 22.04 machine.
