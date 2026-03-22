@@ -1,0 +1,344 @@
+
+		--------------------------------------------------------------------------------
+		SECTION 1 — PHASES OF THE PROJECT
+		--------------------------------------------------------------------------------
+
+		The project was broken into multiple phases. Each phase was verified before moving into next phase.
+
+		PHASE 1: Get PX4 SITL + Gazebo running
+		  - Confirm drone spawns in Gazebo
+		  - Confirm PX4 console shows "Ready for takeoff!"
+
+		PHASE 2: Bridge PX4 to ROS 2 via uXRCE-DDS
+		  - Run MicroXRCEAgent udp4 -p 8888
+		  - Verify with: ros2 topic list | grep fmu
+		  - Confirm /fmu/out/* topics appear
+
+		PHASE 3: Build px4_msgs at correct version
+		  - Clone px4_msgs and checkout release/1.14 (must match PX4 firmware)
+
+		PHASE 4: Arm and hover in offboard mode
+		  - Wrote waypoint-navigator.py
+		  - Verify: drone leaves ground in Gazebo, state_subscriber shows armed=True
+		    nav_state=14
+
+		PHASE 5: Camera pipeline
+		  - Switch to iris_opt_flow model
+		  - Confirm /camera/image_raw publishing
+		  - Write perception_node.py with HSV red detection
+		  - Place red box in Gazebo, verify DETECTED on /perception/detection
+
+		PHASE 6: Mission logic
+		  - Replace takeoff_commander with waypoint_navigator
+		  - Implement 3-phase mission: fly → detect → return → land
+		  - Tune detection threshold for accuracy
+		  - Verify full sequence in Gazebo
+
+		PHASE 7: Record rosbag2 as final evidence
+		  - Record all 6 topics during a full mission run
+		  - Verify with ros2 bag info
+
+
+		--------------------------------------------------------------------------------
+		SECTION 2 — ARCHITECTURE DECISIONS
+		--------------------------------------------------------------------------------
+
+		WHY iris_opt_flow OVER iris OR x500
+		  The iris model has many variants. iris_opt_flow has a downward-facing optical
+		  flow camera essential for seeing the landing pad on the ground below.
+
+		WHY px4_msgs ONLY (not px4_ros_com)
+		  px4_ros_com is an older companion library. From PX4 v1.14 onwards, px4_msgs
+		  alone is the recommended approach. Simpler dependency tree, same functionality.
+
+		WHY 2 ranges used HSV DETECTION
+		  Red wraps around the HSV hue spectrum so two ranges are needed:
+		    mask1 = hue 0-15   (red at low end)
+		    mask2 = hue 160-180 (red at high end)
+		    combined with bitwise_or
+
+		WHY VOLATILE QoS (not TRANSIENT_LOCAL)
+		  PX4's uXRCE-DDS bridge publishes all /fmu/out/* topics with VOLATILE
+		  durability. A TRANSIENT_LOCAL subscriber is incompatible — ROS 2 silently
+		  drops the connection with zero error and zero data. This cost hours of
+		  debugging. All subscribers in this project use VOLATILE.
+
+		WHY POSITION CONTROL LANDING (not VEHICLE_CMD_NAV_LAND)
+		  VEHICLE_CMD_NAV_LAND hands control to PX4's landing controller which in SITL
+		  causes the drone to bounce on touchdown due to physics artifacts. Instead, the
+		  navigator slowly increments the z setpoint from -3.0 to 0.0 at 0.2 m/s while
+		  holding x,y fixed. Smooth, controlled, no bounce.
+
+		WHY 5-DETECTION CONFIRMATION
+		  The first DETECTED message fires when the drone first glimpses red from an
+		  angle — not when directly above. Waiting for 5 detections and updating
+		  coordinates each time means detection 5 is the most centered, accurate
+		  position.
+
+		NED vs GAZEBO ENU COORDINATE FRAMES
+		  Gazebo uses ENU (East-North-Up): X=East, Y=North, Z=Up
+		  PX4 uses NED (North-East-Down): X=North, Y=East, Z=Down
+		  Conversion: Gazebo X → NED Y, Gazebo Y → NED X, Gazebo Z → negative NED Z
+		  Pad at Gazebo (0, 8, 0) = NED (8, 0, 0) — directly in the drone's northward
+		  flight path.
+
+
+		--------------------------------------------------------------------------------
+		SECTION 3 — BLOCKERS AND HOW EACH WAS DEBUGGED
+		--------------------------------------------------------------------------------
+		════════════════════════════════════════════════════════════
+		BLOCKER 1: TRANSIENT_LOCAL QoS — silent zero data
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS TRIED:
+		  Ran state_monitor.py node. Node started successfully, no errors.
+		  But no position or status messages appeared in the terminal.
+
+		SYMPTOMS:
+		  - Node running (visible in ros2 node list)
+		  - No log output from on_position or on_status callbacks
+		  - ros2 topic echo /fmu/out/vehicle_local_position worked fine directly
+		  - Zero error messages anywhere
+
+		DIAGNOSIS STEPS:
+		  1. Verified topics existed: ros2 topic list | grep fmu — yes, present
+		  2. Verified data was flowing: ros2 topic echo --once — yes, data present
+		  3. Checked QoS of publisher: ros2 topic info -v /fmu/out/vehicle_local_position
+		     → Publisher QoS: BEST_EFFORT reliability, VOLATILE durability
+		     → Subscriber QoS in code: BEST_EFFORT reliability, TRANSIENT_LOCAL durability
+		     → INCOMPATIBLE QoS match
+
+		ROOT CAUSE:
+		  ROS 2 DDS QoS compatibility rules: TRANSIENT_LOCAL subscriber cannot receive
+		  from VOLATILE publisher. The connection is dropped silently — no warning,
+		  no error, just no data. This is by design in DDS but extremely confusing.
+
+		FIX:
+		  Changed all subscribers:
+		  durability=DurabilityPolicy.TRANSIENT_LOCAL
+		  → durability=DurabilityPolicy.VOLATILE
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 2: px4_msgs message type invalid
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS TRIED:
+		  ros2 topic echo /fmu/out/vehicle_local_position --once
+
+		ERROR SEEN:
+		  The message type 'px4_msgs/msg/VehicleLocalPosition' is invalid
+
+		DIAGNOSIS STEPS:
+		  1. ros2 pkg list | grep px4 → px4_msgs not found
+		  2. find ~/ -name "px4_msgs" -type d → Found only in ~/.local/share/Trash/
+		     → Previous workspace had been deleted
+
+		ROOT CAUSE:
+		  px4_msgs was in the Trash from a previous project cleanup. The workspace
+		  that had it built was gone. No px4_msgs = no ability to deserialize PX4 topics.
+
+		FIX:
+		  Cloned fresh:
+		  cd ~/ros2_ws/src
+		  git clone https://github.com/PX4/px4_msgs.git
+		  cd px4_msgs && git checkout release/1.14  ← CRITICAL: must match PX4 v1.14
+		  cd ~/ros2_ws && colcon build --packages-select px4_msgs
+		  Built in 3m 54s. Data flowing immediately after sourcing.
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 3: Drone waypoints not advancing — counter logic bug
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS TRIED:
+		  Waypoint navigator launched. Drone armed and hovered. Terminal immediately
+		  printed "All waypoints complete — holding position" without moving.
+
+		SYMPTOMS:
+		  - Drone at x≈0, y≈0, z≈-3m (just hovering home)
+		  - waypoint_navigator logged "All waypoints complete" on first check
+		  - Drone never moved toward any waypoint
+
+		DIAGNOSIS STEPS:
+		  1. Added logging to print distance to each waypoint at each tick
+		  2. Discovered: drone starts at x=0.05, y=-0.02 which is within ARRIVE_DIST
+		     (0.5m) of WP0=[0,0,-3] immediately
+		  3. WP0 marked done → check WP1, also within distance → check WP2...
+		     All waypoints passed in first tick because drone starts near WP0
+
+		ROOT CAUSE:
+		  Waypoint logic checked distance on first tick before drone was stable.
+		  Distance threshold too loose. Waypoints too close to starting position.
+
+		FIX (iterative):
+		  First fix: increased ARRIVE_DIST, added hold time → still buggy
+		  Second fix: rewrote as time-based (hold each waypoint N seconds regardless
+		  of position) → simpler, worked reliably
+		  Final fix: removed waypoints entirely, switched to single target point with
+		  timer-based advance (fly to x=20 after 8 seconds, detect along the way)
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 4: Red box spawn failing
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS TRIED (multiple approaches):
+
+		Attempt 1: rosservice call /gazebo/spawn_sdf_model
+		  ERROR: Command 'rosservice' not found
+		  REASON: ROS 1 command, this is ROS 2
+
+		Attempt 2: ros2 service call /gazebo/spawn_entity gazebo_msgs/srv/SpawnEntity
+		  ERROR: waiting for service to become available...
+		  REASON: gazebo_msgs ROS 2 service not running in this Gazebo Classic setup
+
+		Attempt 3: gzfactory spawn -f /tmp/red_box.sdf
+		  ERROR: gzfactory: command not found
+		  REASON: gzfactory not in PATH on this system
+
+		Attempt 4: gz model -f /tmp/red_box.sdf -m red_box_1 -x 4 -y 0 -z 0
+		  WORKED — but only when Gazebo was running (sim not paused)
+		  Box spawned but with wrong pink/salmon color — Gazebo material script
+		  "Gazebo/Red" not rendering correctly
+
+		Attempt 5: Gazebo GUI Model Editor
+		  Changed diffuse color to R=1, G=0, B=0 via Link Inspector
+		  PROBLEM: Editing paused the simulation. Drone fell and crashed.
+
+		FINAL FIX:
+		  Wrote the red box directly into the world file before launch using raw RGBA
+		  values (not material scripts). World file loaded at startup = no runtime
+		  spawning needed, correct red color guaranteed.
+
+		  <material>
+		    <ambient>1 0 0 1</ambient>
+		    <diffuse>1 0 0 1</diffuse>
+		  </material>
+
+		  Launch with: PX4_SITL_WORLD=red_boxes make px4_sitl gazebo-classic_iris_opt_flow
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 5: NED vs ENU axis confusion — drone flying wrong direction
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS SEEN:
+		  Boxes placed at Gazebo x=4, y=0. Drone target set to NED x=4, y=0.
+		  Drone and boxes were visually going in perpendicular directions in Gazebo.
+
+		DIAGNOSIS:
+		  Gazebo uses ENU (East-North-Up):
+		    Gazebo X = East
+		    Gazebo Y = North
+
+		  PX4 NED (North-East-Down):
+		    NED X = North
+		    NED Y = East
+
+		  Conversion:
+		    Gazebo X → NED Y (East)
+		    Gazebo Y → NED X (North)
+
+		  Boxes at Gazebo (4, 0) = NED (0, 4) — East
+		  Drone target NED (4, 0) — North
+		  Completely perpendicular. Drone flies North, boxes are East.
+
+		FIX:
+		  Updated world file box positions to Gazebo ENU coordinates that map to
+		  the drone's NED flight path.
+
+		  Drone flies NED x=+positive (North)
+		  In Gazebo ENU that is Y axis positive
+		  So box goes at Gazebo (0, 8) = NED (8, 0) ✓
+
+		  This took multiple iterations to get right. Intermediate incorrect attempt
+		  placed boxes at Gazebo (0, -4), (0, -8), (0, -12) mapping to NED (-4, 0)
+		  which is South — drone was flying North. Still wrong.
+
+		  Final correct setup:
+		    World file: <pose>0 8 0 0 0 0</pose>  ← Gazebo ENU (0, 8) = NED (8, 0)
+		    Navigator: self._send_position(20.0, 0.0, -3.0)  ← NED North, passes x=8
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 6: Drone landing outside the box
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS SEEN:
+		  DETECTED triggered but drone landed 1-2m away from red box.
+		  Multiple attempts with different threshold values still missed.
+
+		ROOT CAUSE (diagnosed iteratively):
+
+		  Attempt 1: Threshold too low (area < 500)
+		    Detection fired when drone first glimpsed red from far away at an angle.
+		    Saved position was drone location when red was at edge of frame — offset
+		    from actual box center.
+
+		  Attempt 2: Increased threshold to 3000, then 8000
+		    Helped but not enough. Drone still moving fast when detection triggered.
+
+		  Attempt 3: Single detection save
+		    First detection was always at an angle, coordinates always offset.
+
+		FINAL FIX:
+		  Wait for 5 detections before confirming position. Update saved coordinates
+		  on every detection. By detection 5 the drone has more frame coverage and
+		  the saved position is the most centered average.
+
+		  self._detect_count += 1
+		  self._box_x = self._cur_x  ← update every time, not just first
+		  self._box_y = self._cur_y
+		  if self._detect_count >= 5:
+		      self._box_found = True
+
+		  Combined with: return above saved position at altitude BEFORE descending,
+		  not descend from wherever detection happened.
+
+		════════════════════════════════════════════════════════════
+		BLOCKER 7: Drone bouncing on landing
+		════════════════════════════════════════════════════════════
+
+		WHAT WAS SEEN:
+		  Used VEHICLE_CMD_NAV_LAND command. Drone descended then bounced violently
+		  on touchdown — went back up 2-3m then crashed.
+
+		ROOT CAUSE:
+		  PX4 SITL's landing controller uses aggressive touchdown detection.
+		  In Gazebo Classic with default physics, the impact detection triggers
+		  a rapid disarm which causes the drone to fall, hit the ground, and
+		  bounce due to collision physics.
+
+		FIX:
+		  Replaced VEHICLE_CMD_NAV_LAND with manual position control descent.
+		  Incrementally raise z setpoint from -3.0 to 0.0 at 0.02m per tick:
+
+		  self._land_z += 0.02   # 10Hz × 0.02 = 0.2 m/s descent rate
+		  self._send_position(self._box_x, self._box_y, self._land_z)
+
+		  Smooth descent, no bounce, no handoff to PX4 landing controller.
+
+		--------------------------------------------------------------------------------
+		SECTION 6 — WHAT WOULD BE IMPROVED WITH MORE TIME
+		--------------------------------------------------------------------------------
+
+		1. REPLACE HSV WITH ARUCO MARKER DETECTION
+		   HSV is fragile — Gazebo lighting, pad color rendering, and camera exposure
+		   all affect it. ArUco markers provide sub-centimeter pose estimation from a
+		   single camera frame. The drone would know not just "red is there" but exact
+		   3D position and orientation of the marker.
+		   Implementation: cv2.aruco.detectMarkers() — already in OpenCV.
+		   PX4 has built-in precision landing support for this via IRLock.
+
+		2. CLOSED-LOOP LANDING USING PIXEL OFFSET
+		   Currently the drone saves a NED position when detection confirms and flies
+		   back to it. Better: once above the pad, use the pixel offset of the detected
+		   centroid from image center to generate velocity corrections — fly toward
+		   the center of the pad in real time. Higher precision, no coordinate frame
+		   conversion needed.
+
+		3. UPGRADE TO GAZEBO GARDEN + x500
+		   x500 with Gazebo Garden has better camera, more realistic physics, and
+		   native ROS 2 bridge without manual setup_gazebo.bash sourcing.
+		   Blocked currently because the system has Gazebo Classic 11 only.
+
+
+		================================================================================
+		END OF REPORT
+		================================================================================
