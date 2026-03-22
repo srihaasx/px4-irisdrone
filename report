@@ -63,12 +63,6 @@
 		  drops the connection with zero error and zero data. This cost hours of
 		  debugging. All subscribers in this project use VOLATILE.
 
-		WHY POSITION CONTROL LANDING (not VEHICLE_CMD_NAV_LAND)
-		  VEHICLE_CMD_NAV_LAND hands control to PX4's landing controller which in SITL
-		  causes the drone to bounce on touchdown due to physics artifacts. Instead, the
-		  navigator slowly increments the z setpoint from -3.0 to 0.0 at 0.2 m/s while
-		  holding x,y fixed. Smooth, controlled, no bounce.
-
 		WHY 5-DETECTION CONFIRMATION
 		  The first DETECTED message fires when the drone first glimpses red from an
 		  angle — not when directly above. Waiting for 5 detections and updating
@@ -120,17 +114,7 @@
 		Fix     : Moved box to Gazebo (0, 8) = NED (8, 0) — directly in drone's path.
 		
 		
-		BLOCKER 5: Drone landing 1-2m outside the box
-		----------------------------------------------
-		Symptom : DETECTED triggered but drone consistently landed beside the pad.
-		Cause   : First detection fired while drone was still approaching at an angle.
-		          Saved position was offset from actual pad center.
-		Fix     : Wait for 5 detections before confirming. Update saved position on
-		          every detection — by detection 5 the position is most accurate.
-		          Return above saved position before descending, not descend in place.
-		
-		
-		BLOCKER 6: Drone bouncing on touchdown
+		BLOCKER 5: Drone bouncing on touchdown
 		---------------------------------------
 		Symptom : VEHICLE_CMD_NAV_LAND caused violent bounce — drone went back up
 		          2-3m then crashed.
@@ -140,7 +124,7 @@
 		          self._land_z += 0.02 per tick. Smooth, no bounce.
 
 		--------------------------------------------------------------------------------
-		SECTION 6 — WHAT WOULD BE IMPROVED WITH MORE TIME
+		SECTION 4  — WHAT WOULD BE IMPROVED WITH MORE TIME
 		--------------------------------------------------------------------------------
 
 		1. REPLACE HSV WITH ARUCO MARKER DETECTION
@@ -163,7 +147,3 @@
 		   native ROS 2 bridge without manual setup_gazebo.bash sourcing.
 		   Blocked currently because the system has Gazebo Classic 11 only.
 
-
-		================================================================================
-		END OF REPORT
-		================================================================================
