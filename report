@@ -86,233 +86,58 @@
 		--------------------------------------------------------------------------------
 		SECTION 3 — BLOCKERS AND HOW EACH WAS DEBUGGED
 		--------------------------------------------------------------------------------
-		════════════════════════════════════════════════════════════
-		BLOCKER 1: TRANSIENT_LOCAL QoS — silent zero data
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS TRIED:
-		  Ran state_monitor.py node. Node started successfully, no errors.
-		  But no position or status messages appeared in the terminal.
-
-		SYMPTOMS:
-		  - Node running (visible in ros2 node list)
-		  - No log output from on_position or on_status callbacks
-		  - ros2 topic echo /fmu/out/vehicle_local_position worked fine directly
-		  - Zero error messages anywhere
-
-		DIAGNOSIS STEPS:
-		  1. Verified topics existed: ros2 topic list | grep fmu — yes, present
-		  2. Verified data was flowing: ros2 topic echo --once — yes, data present
-		  3. Checked QoS of publisher: ros2 topic info -v /fmu/out/vehicle_local_position
-		     → Publisher QoS: BEST_EFFORT reliability, VOLATILE durability
-		     → Subscriber QoS in code: BEST_EFFORT reliability, TRANSIENT_LOCAL durability
-		     → INCOMPATIBLE QoS match
-
-		ROOT CAUSE:
-		  ROS 2 DDS QoS compatibility rules: TRANSIENT_LOCAL subscriber cannot receive
-		  from VOLATILE publisher. The connection is dropped silently — no warning,
-		  no error, just no data. This is by design in DDS but extremely confusing.
-
-		FIX:
-		  Changed all subscribers:
-		  durability=DurabilityPolicy.TRANSIENT_LOCAL
-		  → durability=DurabilityPolicy.VOLATILE
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 2: px4_msgs message type invalid
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS TRIED:
-		  ros2 topic echo /fmu/out/vehicle_local_position --once
-
-		ERROR SEEN:
-		  The message type 'px4_msgs/msg/VehicleLocalPosition' is invalid
-
-		DIAGNOSIS STEPS:
-		  1. ros2 pkg list | grep px4 → px4_msgs not found
-		  2. find ~/ -name "px4_msgs" -type d → Found only in ~/.local/share/Trash/
-		     → Previous workspace had been deleted
-
-		ROOT CAUSE:
-		  px4_msgs was in the Trash from a previous project cleanup. The workspace
-		  that had it built was gone. No px4_msgs = no ability to deserialize PX4 topics.
-
-		FIX:
-		  Cloned fresh:
-		  cd ~/ros2_ws/src
-		  git clone https://github.com/PX4/px4_msgs.git
-		  cd px4_msgs && git checkout release/1.14  ← CRITICAL: must match PX4 v1.14
-		  cd ~/ros2_ws && colcon build --packages-select px4_msgs
-		  Built in 3m 54s. Data flowing immediately after sourcing.
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 3: Drone waypoints not advancing — counter logic bug
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS TRIED:
-		  Waypoint navigator launched. Drone armed and hovered. Terminal immediately
-		  printed "All waypoints complete — holding position" without moving.
-
-		SYMPTOMS:
-		  - Drone at x≈0, y≈0, z≈-3m (just hovering home)
-		  - waypoint_navigator logged "All waypoints complete" on first check
-		  - Drone never moved toward any waypoint
-
-		DIAGNOSIS STEPS:
-		  1. Added logging to print distance to each waypoint at each tick
-		  2. Discovered: drone starts at x=0.05, y=-0.02 which is within ARRIVE_DIST
-		     (0.5m) of WP0=[0,0,-3] immediately
-		  3. WP0 marked done → check WP1, also within distance → check WP2...
-		     All waypoints passed in first tick because drone starts near WP0
-
-		ROOT CAUSE:
-		  Waypoint logic checked distance on first tick before drone was stable.
-		  Distance threshold too loose. Waypoints too close to starting position.
-
-		FIX (iterative):
-		  First fix: increased ARRIVE_DIST, added hold time → still buggy
-		  Second fix: rewrote as time-based (hold each waypoint N seconds regardless
-		  of position) → simpler, worked reliably
-		  Final fix: removed waypoints entirely, switched to single target point with
-		  timer-based advance (fly to x=20 after 8 seconds, detect along the way)
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 4: Red box spawn failing
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS TRIED (multiple approaches):
-
-		Attempt 1: rosservice call /gazebo/spawn_sdf_model
-		  ERROR: Command 'rosservice' not found
-		  REASON: ROS 1 command, this is ROS 2
-
-		Attempt 2: ros2 service call /gazebo/spawn_entity gazebo_msgs/srv/SpawnEntity
-		  ERROR: waiting for service to become available...
-		  REASON: gazebo_msgs ROS 2 service not running in this Gazebo Classic setup
-
-		Attempt 3: gzfactory spawn -f /tmp/red_box.sdf
-		  ERROR: gzfactory: command not found
-		  REASON: gzfactory not in PATH on this system
-
-		Attempt 4: gz model -f /tmp/red_box.sdf -m red_box_1 -x 4 -y 0 -z 0
-		  WORKED — but only when Gazebo was running (sim not paused)
-		  Box spawned but with wrong pink/salmon color — Gazebo material script
-		  "Gazebo/Red" not rendering correctly
-
-		Attempt 5: Gazebo GUI Model Editor
-		  Changed diffuse color to R=1, G=0, B=0 via Link Inspector
-		  PROBLEM: Editing paused the simulation. Drone fell and crashed.
-
-		FINAL FIX:
-		  Wrote the red box directly into the world file before launch using raw RGBA
-		  values (not material scripts). World file loaded at startup = no runtime
-		  spawning needed, correct red color guaranteed.
-
-		  <material>
-		    <ambient>1 0 0 1</ambient>
-		    <diffuse>1 0 0 1</diffuse>
-		  </material>
-
-		  Launch with: PX4_SITL_WORLD=red_boxes make px4_sitl gazebo-classic_iris_opt_flow
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 5: NED vs ENU axis confusion — drone flying wrong direction
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS SEEN:
-		  Boxes placed at Gazebo x=4, y=0. Drone target set to NED x=4, y=0.
-		  Drone and boxes were visually going in perpendicular directions in Gazebo.
-
-		DIAGNOSIS:
-		  Gazebo uses ENU (East-North-Up):
-		    Gazebo X = East
-		    Gazebo Y = North
-
-		  PX4 NED (North-East-Down):
-		    NED X = North
-		    NED Y = East
-
-		  Conversion:
-		    Gazebo X → NED Y (East)
-		    Gazebo Y → NED X (North)
-
-		  Boxes at Gazebo (4, 0) = NED (0, 4) — East
-		  Drone target NED (4, 0) — North
-		  Completely perpendicular. Drone flies North, boxes are East.
-
-		FIX:
-		  Updated world file box positions to Gazebo ENU coordinates that map to
-		  the drone's NED flight path.
-
-		  Drone flies NED x=+positive (North)
-		  In Gazebo ENU that is Y axis positive
-		  So box goes at Gazebo (0, 8) = NED (8, 0) ✓
-
-		  This took multiple iterations to get right. Intermediate incorrect attempt
-		  placed boxes at Gazebo (0, -4), (0, -8), (0, -12) mapping to NED (-4, 0)
-		  which is South — drone was flying North. Still wrong.
-
-		  Final correct setup:
-		    World file: <pose>0 8 0 0 0 0</pose>  ← Gazebo ENU (0, 8) = NED (8, 0)
-		    Navigator: self._send_position(20.0, 0.0, -3.0)  ← NED North, passes x=8
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 6: Drone landing outside the box
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS SEEN:
-		  DETECTED triggered but drone landed 1-2m away from red box.
-		  Multiple attempts with different threshold values still missed.
-
-		ROOT CAUSE (diagnosed iteratively):
-
-		  Attempt 1: Threshold too low (area < 500)
-		    Detection fired when drone first glimpsed red from far away at an angle.
-		    Saved position was drone location when red was at edge of frame — offset
-		    from actual box center.
-
-		  Attempt 2: Increased threshold to 3000, then 8000
-		    Helped but not enough. Drone still moving fast when detection triggered.
-
-		  Attempt 3: Single detection save
-		    First detection was always at an angle, coordinates always offset.
-
-		FINAL FIX:
-		  Wait for 5 detections before confirming position. Update saved coordinates
-		  on every detection. By detection 5 the drone has more frame coverage and
-		  the saved position is the most centered average.
-
-		  self._detect_count += 1
-		  self._box_x = self._cur_x  ← update every time, not just first
-		  self._box_y = self._cur_y
-		  if self._detect_count >= 5:
-		      self._box_found = True
-
-		  Combined with: return above saved position at altitude BEFORE descending,
-		  not descend from wherever detection happened.
-
-		════════════════════════════════════════════════════════════
-		BLOCKER 7: Drone bouncing on landing
-		════════════════════════════════════════════════════════════
-
-		WHAT WAS SEEN:
-		  Used VEHICLE_CMD_NAV_LAND command. Drone descended then bounced violently
-		  on touchdown — went back up 2-3m then crashed.
-
-		ROOT CAUSE:
-		  PX4 SITL's landing controller uses aggressive touchdown detection.
-		  In Gazebo Classic with default physics, the impact detection triggers
-		  a rapid disarm which causes the drone to fall, hit the ground, and
-		  bounce due to collision physics.
-
-		FIX:
-		  Replaced VEHICLE_CMD_NAV_LAND with manual position control descent.
-		  Incrementally raise z setpoint from -3.0 to 0.0 at 0.02m per tick:
-
-		  self._land_z += 0.02   # 10Hz × 0.02 = 0.2 m/s descent rate
-		  self._send_position(self._box_x, self._box_y, self._land_z)
-
-		  Smooth descent, no bounce, no handoff to PX4 landing controller.
+		
+		BLOCKER 1: Silent zero data from PX4 topics
+		--------------------------------------------
+		Symptom : Node running but no messages received. No errors anywhere.
+		Cause   : QoS mismatch. Code used TRANSIENT_LOCAL, PX4 publishes VOLATILE.
+		          ROS 2 drops the connection silently with no warning.
+		Fix     : Changed all subscribers to DurabilityPolicy.VOLATILE.
+		
+		
+		BLOCKER 2: Waypoints all skipped on first tick
+		-----------------------------------------------
+		Symptom : "All waypoints complete" printed immediately. Drone never moved.
+		Cause   : Drone starts at x=0.05 which was already within the 0.5m arrival
+		          threshold of WP0=[0,0,-3]. All waypoints passed in one tick.
+		Fix     : Removed distance-based waypoints. Switched to time-based logic —
+		          fly forward for N seconds, then detect.
+		
+		
+		BLOCKER 3: Red box wouldn't spawn correctly
+		--------------------------------------------
+		Symptom : spawn_entity service not available. gzfactory not found. gz model spawned pink box, not red.
+		          Gazebo GUI editor paused the sim and crashed the drone.
+		Fix     : Hardcoded the red box directly in the world file using raw RGBA
+		          values. Loaded at startup — no runtime spawning needed.
+		
+		
+		BLOCKER 4: Drone flying perpendicular to box positions
+		-------------------------------------------------------
+		Symptom : Drone flew north, boxes were east. Never intersected.
+		Cause   : Gazebo uses ENU (Y=North), PX4 uses NED (X=North). Axes are swapped.
+		          Box at Gazebo (4, 0) = NED (0, 4) — East, not North.
+		Fix     : Moved box to Gazebo (0, 8) = NED (8, 0) — directly in drone's path.
+		
+		
+		BLOCKER 5: Drone landing 1-2m outside the box
+		----------------------------------------------
+		Symptom : DETECTED triggered but drone consistently landed beside the pad.
+		Cause   : First detection fired while drone was still approaching at an angle.
+		          Saved position was offset from actual pad center.
+		Fix     : Wait for 5 detections before confirming. Update saved position on
+		          every detection — by detection 5 the position is most accurate.
+		          Return above saved position before descending, not descend in place.
+		
+		
+		BLOCKER 6: Drone bouncing on touchdown
+		---------------------------------------
+		Symptom : VEHICLE_CMD_NAV_LAND caused violent bounce — drone went back up
+		          2-3m then crashed.
+		Cause   : PX4 SITL landing controller triggers aggressive disarm on impact.
+		          Gazebo collision physics amplifies the bounce.
+		Fix     : Replaced with manual z setpoint descent at 0.2 m/s.
+		          self._land_z += 0.02 per tick. Smooth, no bounce.
 
 		--------------------------------------------------------------------------------
 		SECTION 6 — WHAT WOULD BE IMPROVED WITH MORE TIME
