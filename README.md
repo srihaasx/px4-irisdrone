@@ -1,4 +1,4 @@
-# PX4 Iris Drone — ROS 2 SITL Perception Pipeline
+# PX4: ROS 2 SITL Perception Pipeline
 
 Autonomous drone pipeline: takes off, flies toward a red landing pad, detects it with OpenCV HSV color detection, returns above it, and lands precisely on it.
 
