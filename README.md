@@ -20,29 +20,29 @@ Autonomous drone simulation built on PX4, ROS 2 Humble, and Gazebo Classic. The 
 ## Architecture
 
 ```
-                                ┌──────────────────────────────────────────────────────────────┐
-                                │                      Simulation Layer                        │
-                                │                                                              │
-                                │   PX4 SITL          Gazebo Classic 11       uXRCE-DDS        │
-                                │   (autopilot   →    (physics + camera   →   (PX4 ↔ ROS 2     │
-                                │    firmware)         simulation)             bridge)         │
-                                │                           │                      │           │
-                                │                    /camera/image_raw      /fmu/out/*         │
-                                └───────────────────────────┼──────────────────────┼───────────┘
-                                                            │                      │
-                                ┌───────────────────────────▼──────────────────────▼───────────┐
-                                │                     ROS 2 Workspace (assignment_ws)          │
-                                │                                                              │
-                                │  state_subscriber    perception_node     waypoint_navigator  │
-                                │  reads PX4 state  →  reads camera     →  reads detection     │
-                                │  logs to console     runs HSV detect     flies mission       │
-                                │                      publishes result    lands on pad        │
-                                │                                                              │
-                                │                       rosbag2 recorder                       │
-                                │                       records all 6 topics                   │
-                                └──────────────────────────────────────────────────────────────┘
----
+    ┌──────────────────────────────────────────────────────────────┐
+    │                      Simulation Layer                        │
+    │                                                              │
+    │   PX4 SITL          Gazebo Classic 11       uXRCE-DDS        │
+    │   (autopilot   →    (physics + camera   →   (PX4 ↔ ROS 2     │
+    │    firmware)         simulation)             bridge)         │
+    │                           │                      │           │
+    │                    /camera/image_raw      /fmu/out/*         │
+    └───────────────────────────┼──────────────────────┼───────────┘
+                                │                      │
+    ┌───────────────────────────▼──────────────────────▼───────────┐
+    │                     ROS 2 Workspace (assignment_ws)          │
+    │                                                              │
+    │  state_subscriber    perception_node     waypoint_navigator  │
+    │  reads PX4 state  →  reads camera     →  reads detection     │
+    │  logs to console     runs HSV detect     flies mission       │
+    │                      publishes result    lands on pad        │
+    │                                                              │
+    │                       rosbag2 recorder                       │
+    │                       records all 6 topics                   │
+    └──────────────────────────────────────────────────────────────┘
 
+```
 ## File structure
 
 ```
@@ -67,11 +67,12 @@ px4-irisdrone/
 The Gazebo world file with the red landing pad lives at:
 ```
 ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/red_boxes.world
-```
 
+```
 ## Run
 
-**Terminal 1 — PX4 SITL:**
+**Terminal 1 — PX4-SITL:**
+
 ```bash
 cd ~/PX4-Autopilot
 source Tools/simulation/gazebo-classic/setup_gazebo.bash \
